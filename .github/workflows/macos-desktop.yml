@@ -1,0 +1,68 @@
+name: macOS desktop preview
+
+on:
+  push:
+    branches: [build/macos-preview]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x64]
+    runs-on: macos-14
+    timeout-minutes: 90
+    env:
+      PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-python@ec52d0af729a7c50ced4261d17a07916f43f5b8e
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+      - name: Install nasm (needed to cross-build the x64 media sources)
+        if: matrix.arch == 'x64'
+        run: brew install nasm
+      - name: Install test dependencies
+        run: python3 -m pip install -r requirements-dev.txt -r desktop/requirements-macos.lock
+      - name: Portability contracts
+        run: python3 -m pytest tests/unit/test_desktop_distribution.py tests/unit/test_propainter_runtime.py tests/unit/test_codex_install.py -q
+      - name: Install dashboard dependencies
+        working-directory: dashboard
+        run: npm ci
+      - uses: actions/cache@3edfce9056124e459a23f683a21433670d47daca
+        with:
+          path: desktop/.cache
+          key: macos-${{ matrix.arch }}-v1-${{ hashFiles('desktop/runtime-lock.json', 'desktop/media-build.py', 'desktop/requirements-macos.lock') }}
+      - name: Build unsigned preview app and DMG
+        run: python3 desktop/build-macos.py --arch ${{ matrix.arch }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: FrameWeaver-macOS-${{ matrix.arch }}-preview
+          path: |
+            release/*.dmg
+            release/*-media-sources.zip
+            release/*-manifest.json
+            release/SHA256SUMS.txt
+            release/RELEASE-NOTES-vi.md
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: failure()
+        with:
+          name: macOS-${{ matrix.arch }}-build-diagnostics
+          path: |
+            desktop/.cache/**/*.log
+          if-no-files-found: ignore
+          retention-days: 7
